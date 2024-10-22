@@ -3,6 +3,10 @@ import healpy as hp
 import os
 from astropy.table import Table
 from pathlib import Path
+from sklearn.neighbors import KernelDensity
+import wget
+from astropy.io import fits
+from tqdm import tqdm
 
 # =================================
 #               modules
@@ -25,25 +29,65 @@ class lensing_cov():
         self.output_dir = output_dir
         self.nres = nres
         self.nside = 2**self.nres
-        self.npix = hp.nside2self.npix(nside=self.nside)
-        self.nsbins
+        self.npix = hp.nside2npix(nside=self.nside)
+        self.nsbins = nsbins
         
-    def download_lensing_files(self, zindex, los):
+    def download_lensing_files(self, zindex, los, overwrite):
         if(los<54):
-            os.system(f'wget  "http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat"  -P '+self.download_dir)
-         else:
-            os.system(f'wget  "http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat"  -P '+self.download_dir)
+            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
+            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
+        else:
+            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
+            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
+          
+        if((Path(filename).exists())&(overwrite==False)):
+            print(filename, 'already exits')
+        else:
+            wget.download(url,out=filename,bar=wget.bar_adaptive)  
+            print(filename, 'downloaded')
+            
             
 
-    
-    
-    def download_density_files(self, los):
+    def download_density_files(self, los, overwrite):
         if(los<54):
-            os.system(f'wget  "http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat"  -P '+self.download_dir)
-         else:
-            os.system(f'wget  "http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat"  -P '+self.download_dir)
+            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+        else:
+            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+         
+        if((Path(filename).exists())&(overwrite==False)):
+            print(filename, 'already exits')
+        else:
+            wget.download(url,out=filename,bar=wget.bar_adaptive)  
+            print(filename, 'downloaded')
+        
+    def check_files(self,los):
+        
+        all_files_available = True
+        for zbin in range(self.nzbins):
+            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zbin+1}.mag.dat'
+    
+            if(Path(filename).exists()):
+                # print('lensing file '+filename+' already downloaded')
+                continue
+            else:
+                print('downloading lensing file '+filename)
+                self.download_lensing_files(zindex=zbin+1, los=los, overwrite = True)
+                all_files_available = False
+        if(all_files_available):
+            print('all source files available')
             
- 
+        all_files_available = False 
+        filename = self.download_dir+f'/allskymap_nres{self.nres:02}r{los:03}.delta_shell.dat'
+        if(Path(filename).exists()):
+            all_files_available = True
+        else:
+            print('downloading density file '+filename)
+            download_density_files(los=los,overwrite = True)   
+
+        if(all_files_available):
+            print('density file '+filename+' available')
 
     def load_maps(self, z, los):
         
@@ -190,48 +234,10 @@ class lensing_cov():
         
         return epsilon_obs.real, epsilon_obs.imag  
     
-    def add_noise_sigma(self, g1, g2, sigma):
-        
-        g = g1+1j*g2
-        g_bigger1 = np.abs(g)>=1
-        g_smaller1 = np.abs(g)<1
-        
-        epsilon1 = np.random.normal(0,sigma,np.sum(g_bigger1))
-        epsilon2 = np.random.normal(0,sigma,np.sum(g_bigger1))
-        eps_int_bigger1 = epsilon1+1j*epsilon2
-
-        epsilon1 = np.random.normal(0,sigma,np.sum(g_smaller1))
-        epsilon2 = np.random.normal(0,sigma,np.sum(g_smaller1))
-        eps_int_smalller1 = epsilon1+1j*epsilon2
-
-        epsilon_obs = np.ones(len(g1))+1j*np.ones(len(g2))
-
-        epsilon_obs[g_smaller1] = (g[g_smaller1] + eps_int_smalller1)/(1 + g[g_smaller1].conj()*eps_int_smalller1)
-        epsilon_obs[g_bigger1] = (1 + g[g_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1].conj() + eps_int_bigger1.conj())
-        
-        while(np.sum(np.abs(epsilon_obs)>=1)>0):
-            print(np.sum(np.abs(epsilon_obs)>=1))
-            eobs_bigger1 = np.abs(epsilon_obs[g_bigger1])>=1
-            eobs_smaller1 = np.abs(epsilon_obs[g_smaller1])>=1
-            
-            epsilon1 = np.random.normal(0,sigma,np.sum(eobs_bigger1))
-            epsilon2 = np.random.normal(0,sigma,np.sum(eobs_bigger1))
-            eps_int_bigger1 = epsilon1+1j*epsilon2
-            eps_int_bigger1
-
-            epsilon1 = np.random.normal(0,sigma,np.sum(eobs_smaller1))
-            epsilon2 = np.random.normal(0,sigma,np.sum(eobs_smaller1))
-            eps_int_smaller1 = epsilon1+1j*epsilon2
-            
-            epsilon_obs[np.where(g_smaller1)[0][eobs_smaller1]] = (g[g_smaller1][eobs_smaller1] + eps_int_smaller1)/(1 + g[g_smaller1][eobs_smaller1].conj()*eps_int_smaller1)
-            epsilon_obs[np.where(g_bigger1)[0][eobs_bigger1]] = (1 + g[g_bigger1][eobs_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1][eobs_bigger1].conj() + eps_int_bigger1.conj())
-
-        return epsilon_obs.real, epsilon_obs.imag  
-
+    
     def create_real_shear_catalogue(self, sbin, los, ra_sources, dec_sources, e_1_rot, e_2_rot, weights):
 
         gamma1,gamma2,kappa  = self.loading_shear_maps(sbin,los)
-        
         
         pix_center_rot = hp.ang2pix(nside=self.nside,theta=ra_sources,phi=dec_sources,lonlat=True)
 
@@ -259,18 +265,19 @@ class lensing_cov():
     def compute_T17_Nz(self,z_persbin,Nz_persbin):
     
         zbins = np.loadtxt('nofz/nofz_takashi_zbins.dat')
-        
-        Nz_persbin = []
-        
+          
+        N_T17_persbin = []      
         for sbin in range(self.nsbins):
             zfine = []
             nzfine = []
 
             fine_grid = 100000
             zfine = np.linspace(z_persbin[sbin][0],z_persbin[sbin][1],fine_grid) 
+            print(sbin)
+        
             nzfine = np.ones(fine_grid)*Nz_persbin[sbin][0]/fine_grid 
                 
-            for i in range(len(z_persbin[sbin][0])-2):
+            for i in range(len(z_persbin[sbin])-2):
                 zfine = np.concatenate((zfine,np.linspace(z_persbin[sbin][i+1],z_persbin[sbin][i+2],fine_grid)[1:]))
                 nzfine = np.concatenate((nzfine,np.ones(fine_grid-1)*Nz_persbin[sbin][i+1]/(fine_grid-1)))
                 
@@ -286,30 +293,32 @@ class lensing_cov():
                     upper_edge = np.where(zbins[j,2]>zfine)[0][-1]
                     N_T17.append(np.sum(nzfine[lower_edge:upper_edge]))
 
-            Nz_persbin.append(N_T17)
+            N_T17_persbin.append(N_T17)
             
         self.zbins = zbins
-        self.Nz_persbin = np.array(Nz_persbin)
+        self.N_T17_persbin = np.array(N_T17_persbin)
         self.nzbins = len(zbins)
         
         weights = []
         for i in range(self.nsbins):
-            weights.append(self.Nz_persbin[i]/np.sum(self.Nz_persbin[i]))
+            weights.append(self.N_T17_persbin[i]/np.sum(self.N_T17_persbin[i]))
         self.Nz_persbin_weights = np.array(weights)       
 
 
-    def create_gal_positions(self,los):
+    def create_gal_positions(self,los, random_seed = 42):
+        
+        np.random.seed(random_seed)
         
         fname = self.download_dir+f'/allskymap_nres{self.nres:02}r{los:03}.delta_shell.dat'
         
-        mu_mean = self.Nz_persbin/self.npix
+        mu_mean = self.N_T17_persbin/self.npix
 
         self.pixel_perzbin_persbin = []
         self.ra_sources_perzbin_persbin = []
         self.dec_sources_perzbin_persbin = []
 
         with open(fname, 'rb') as f:
-            for i in range(self.N_T17_perbin.shape[1]):
+            for i in tqdm(range(self.N_T17_persbin.shape[1])):
                 kplane = int.from_bytes(f.read(4), 'little')  # Read kplane
                 delta_shell = np.frombuffer(f.read(self.npix * 4), dtype=np.float32)  # Read delta_shell
                 
@@ -317,13 +326,14 @@ class lensing_cov():
                 ra_sources_perzbin = []
                 dec_sources_perzbin = []
 
-                for sbin in range(3):
-                    mu = mu_mean[sbin][i] * 1.5 * (1.0 + 1.0 * delta_shell)
+                for sbin in range(self.nsbins):
+                    mu = mu_mean[sbin][i] * 2 * (1.0 + 1.0 * delta_shell)
                     ngal = np.random.poisson(mu)
                     ipix = np.where(ngal>0)[0]
                     if(len(ipix)>0):
                         ipix = np.repeat(ipix, ngal[ipix])
-                        ipix = np.random.choice(range(len(ipix)),int(round(self.Nz_persbin[sbin][i],0)),replace=False)
+                        # print(len(ipix),self.N_T17_persbin[sbin][i])
+                        ipix = np.random.choice(range(len(ipix)),int(round(self.N_T17_persbin[sbin][i],0)),replace=False)
                         
                         ra,dec = hp.pix2ang(nside=2**12,ipix=ipix,lonlat=True)
                         
@@ -339,67 +349,117 @@ class lensing_cov():
                 self.ra_sources_perzbin_persbin.append(ra_sources_perzbin) 
                 self.dec_sources_perzbin_persbin.append(dec_sources_perzbin) 
        
-    def check_files(self,los):
-        
-        for zbin in range(self.nzbins):
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zbin+1}.mag.dat'
     
-            if(Path(filename).exists()):
-                print('lensing file '+filename+' already downloaded')
-            else:
-                print('downloading lensing file '+filename)
-                self.download_lensing_files(zindex=zbin+1, los=los)
-
-        filename = self.download_dir+f'/allskymap_nres{self.nres:02}r{los:03}.delta_shell.dat'
-        if(Path(filename).exists()):
-            print('density file '+filename+' already downloaded')
-        else:
-            print('downloading density file '+filename)
-            download_density_files(los=los)
                      
-    def create_sigma_shear_catalogue(self, sbin, los, sigma):
+    
+    def add_noise_sigma(self, g1, g2, epsilon_cov, epsilon_mean, epsilon_generator, random_seed = 42):
         
-        self.check_files(los)
+        np.random.seed(random_seed)
         
-        self.create_gal_positions(los = los)
+        g = g1+1j*g2
+        g_bigger1 = np.abs(g)>=1
+        g_smaller1 = np.abs(g)<1
         
-        kappa_allbins  = [[] for i in range(self.nsbins)]
-        gamma1_allbins  = [[] for i in range(self.nsbins)]
-        gamma2_allbins  = [[] for i in range(self.nsbins)]
-        ra_allbins  = [[] for i in range(self.nsbins)]
-        dec_allbins  = [[] for i in range(self.nsbins)]
+        if(epsilon_generator):
+            epsilon1,epsilon2,weight_bigger1 = epsilon_generator.sample(np.sum(g_bigger1),random_state=random_seed).T
+            eps_int_bigger1 = epsilon1+1j*epsilon2
+
+            epsilon1,epsilon2,weight_smaller1 = epsilon_generator.sample(np.sum(g_smaller1),random_state=random_seed).T
+            eps_int_smaller1 = epsilon1+1j*epsilon2
+        else:
+            epsilon1,epsilon2,weight_bigger1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_bigger1))
+            eps_int_bigger1 = epsilon1+1j*epsilon2
+
+            epsilon1,epsilon2,weight_smaller1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_smaller1))
+            eps_int_smaller1 = epsilon1+1j*epsilon2
+
+        epsilon_obs = np.ones(len(g1))+1j*np.ones(len(g2))
+
+        epsilon_obs[g_smaller1] = (g[g_smaller1] + eps_int_smaller1)/(1 + g[g_smaller1].conj()*eps_int_smaller1)
+        epsilon_obs[g_bigger1] = (1 + g[g_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1].conj() + eps_int_bigger1.conj())
+        weights = np.ones(len(g1))
+        weights[g_smaller1] = weight_smaller1
+        weights[g_bigger1] = weight_bigger1
+        
+        while(np.sum(np.abs(epsilon_obs)>=1)>0):
+            print(np.sum(np.abs(epsilon_obs)>=1))
+            eobs_bigger1 = np.abs(epsilon_obs[g_bigger1])>=1
+            eobs_smaller1 = np.abs(epsilon_obs[g_smaller1])>=1
+            
+            if(epsilon_generator):
+                epsilon1,epsilon2,weight_bigger1 = epsilon_generator.sample(np.sum(g_bigger1),random_state=random_seed).T
+                eps_int_bigger1 = epsilon1+1j*epsilon2
+
+                epsilon1,epsilon2,weight_smaller1 = epsilon_generator.sample(np.sum(g_smaller1),random_state=random_seed).T
+                eps_int_smaller1 = epsilon1+1j*epsilon2
+            else:
+                epsilon1,epsilon2,weight_bigger1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_bigger1))
+                eps_int_bigger1 = epsilon1+1j*epsilon2
+
+                epsilon1,epsilon2,weight_smaller1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_smaller1))
+                eps_int_smaller1 = epsilon1+1j*epsilon2
+                
+            epsilon_obs[np.where(g_smaller1)[0][eobs_smaller1]] = (g[g_smaller1][eobs_smaller1] + eps_int_smaller1)/(1 + g[g_smaller1][eobs_smaller1].conj()*eps_int_smaller1)
+            epsilon_obs[np.where(g_bigger1)[0][eobs_bigger1]] = (1 + g[g_bigger1][eobs_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1][eobs_bigger1].conj() + eps_int_bigger1.conj())
+
+            weights[g_smaller1] = weight_smaller1
+            weights[g_bigger1] = weight_bigger1
+        
+        return epsilon_obs.real, epsilon_obs.imag, weights 
+    
+    
+    
+    
+    def combine_sourceplanes(self,los):
+        
+        self.kappa_allbins  = [[] for i in range(self.nsbins)]
+        self.gamma1_allbins  = [[] for i in range(self.nsbins)]
+        self.gamma2_allbins  = [[] for i in range(self.nsbins)]
+        self.ra_allbins  = [[] for i in range(self.nsbins)]
+        self.dec_allbins  = [[] for i in range(self.nsbins)]
         
         for zbin in range(self.nzbins):
             print('loading ',zbin+1,los)
             kappa_zbin,gamma1_zbin,gamma2_zbin=self.load_maps(z=zbin+1,los=los)
             for sbin in range(self.nsbins):
                     pix_center = self.pixel_perzbin_persbin[zbin][sbin]
-                    kappa_allbins[sbin].concatanate((kappa_allbins[sbin],kappa_zbin[pix_center]))
-                    gamma1_allbins[sbin].concatanate((gamma1_allbins[sbin],gamma1_zbin[pix_center]))
-                    gamma2_allbins[sbin].concatanate((gamma2_allbins[sbin],gamma2_zbin[pix_center]))
-                    ra_allbins[sbin].concatanate((ra_allbins[sbin],self.ra_sources_perzbin_persbin[zbin][sbin]))
-                    dec_allbins[sbin].concatanate((dec_allbins[sbin],self.dec_sources_perzbin_persbin[zbin][sbin]))
-            
-        gamma_table = Table()
-               
-        for sbin in range(self.nsbins):
-            kappa = kappa_allbins[sbin]
-            gamma1 = gamma1_allbins[sbin]
-            gamma2 = gamma2_allbins[sbin]
-            ra = ra_allbins[sbin]
-            dec = dec_allbins[sbin]
-            
-            g1,g2 = gamma1/(1-kappa),gamma2/(1-kappa)
+                    self.kappa_allbins[sbin] = np.concatenate((self.kappa_allbins[sbin],kappa_zbin[pix_center]))
+                    self.gamma1_allbins[sbin] = np.concatenate((self.gamma1_allbins[sbin],gamma1_zbin[pix_center]))
+                    self.gamma2_allbins[sbin] = np.concatenate((self.gamma2_allbins[sbin],gamma2_zbin[pix_center]))
+                    self.ra_allbins[sbin] = np.concatenate((self.ra_allbins[sbin],self.ra_sources_perzbin_persbin[zbin][sbin]))
+                    self.dec_allbins[sbin] = np.concatenate((self.dec_allbins[sbin],self.dec_sources_perzbin_persbin[zbin][sbin]))
 
-            e1_obs,e2_obs=self.add_noise_sigma(g1=g1, g2=g2, sigma=sigma)
+    
+    def create_sigma_shear_catalogue(self, los, sbin, epsilon_cov=None, epsilon_mean=None, epsilon_data=[], random_seed = 42):
         
-            gamma_table.add_column(ra.astype(np.float32),name=r'ra sbin'+str(sbin))
-            gamma_table.add_column(dec.astype(np.float32),name=r'dec sbin'+str(sbin))
-            gamma_table.add_column(kappa.astype(np.float32),name=r'kappa sbin'+str(sbin))
-            gamma_table.add_column(gamma1.astype(np.float32),name=r'gamma1 sbin'+str(sbin))
-            gamma_table.add_column(gamma2.astype(np.float32),name=r'gamma2 sbin'+str(sbin))
-            gamma_table.add_column(e1_obs.real.astype(np.float32),name=r'eobs1 sbin'+str(sbin))
-            gamma_table.add_column(e2_obs.imag.astype(np.float32),name=r'eobs2 sbin'+str(sbin))
+        gamma_table = Table()     
+        
+        kappa = self.kappa_allbins[sbin]
+        gamma1 = self.gamma1_allbins[sbin]
+        gamma2 = self.gamma2_allbins[sbin]
+        ra = self.ra_allbins[sbin]
+        dec = self.dec_allbins[sbin]
+        
+        g1,g2 = gamma1/(1-kappa),gamma2/(1-kappa)
+        
+        if(len(epsilon_data)>0):
+            epsilon_generator = KernelDensity(kernel='gaussian', bandwidth=0.001)
+            epsilon_generator.fit(epsilon_data.T)
+        else:
+            epsilon_generator = None
+
+        e1_obs,e2_obs=self.add_noise_sigma(g1=g1, g2=g2, epsilon_cov=epsilon_cov, epsilon_mean=epsilon_mean, epsilon_generator=epsilon_generator, random_seed=random_seed)
+    
+        gamma_table.add_column(ra.astype(np.float32),name=r'ra sbin'+str(sbin))
+        gamma_table.add_column(dec.astype(np.float32),name=r'dec sbin'+str(sbin))
+        gamma_table.add_column(kappa.astype(np.float32),name=r'kappa sbin'+str(sbin))
+        gamma_table.add_column(gamma1.astype(np.float32),name=r'gamma1 sbin'+str(sbin))
+        gamma_table.add_column(gamma2.astype(np.float32),name=r'gamma2 sbin'+str(sbin))
+        gamma_table.add_column(e1_obs.real.astype(np.float32),name=r'eobs1 sbin'+str(sbin))
+        gamma_table.add_column(e2_obs.imag.astype(np.float32),name=r'eobs2 sbin'+str(sbin))
 
         
         return gamma_table
+
+
+
