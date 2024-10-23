@@ -1,269 +1,347 @@
 import numpy as np
-import healpy as hp
-import os
+import healpy as hp  # HEALPix for handling spherical maps
 from astropy.table import Table
 from pathlib import Path
-from sklearn.neighbors import KernelDensity
-import wget
-from astropy.io import fits
-from tqdm import tqdm
+from sklearn.neighbors import KernelDensity  # For density estimation
+import wget  # For downloading files
+from tqdm import tqdm  # For progress bars
 
-# =================================
-#               modules
-# =================================
-class lensing_cov():
 
-    def __init__(self, 
-                 download_dir,
-                 output_dir,
-                 nres,
-                 nsbins,
-                 ):
+class LensingMocks:
+    """
+    A class for handling lensing covariance computations.
+    """
+
+    def __init__(self, download_dir, output_dir, nres, nsbins):
         """
-        Constructor
-        """
-        # super
-        super(lensing_cov, self).__init__()
+        Initializes directories, resolution, and number of bins.
 
-        self.download_dir = download_dir
-        self.output_dir = output_dir
+        Parameters:
+        - download_dir (str): Directory to download data
+        - output_dir (str): Directory to output data
+        - nres (int): Resolution parameter (power of 2)
+        - nsbins (int): Number of source bins
+        """
+        self.download_dir = Path(download_dir)
+        self.output_dir = Path(output_dir)
         self.nres = nres
-        self.nside = 2**self.nres
+        self.nside = 2 ** self.nres
         self.npix = hp.nside2npix(nside=self.nside)
         self.nsbins = nsbins
-        
-    def download_lensing_files(self, zindex, los, overwrite):
-        if(los<54):
-            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
-        else:
-            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
-          
-        if((Path(filename).exists())&(overwrite==False)):
-            print(filename, 'already exits')
-        else:
-            wget.download(url,out=filename,bar=wget.bar_adaptive)  
-            print(filename, 'downloaded')
-            
-            
 
-    def download_density_files(self, los, overwrite):
-        if(los<54):
-            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub1/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+    def download_file(self, url, filename, overwrite):
+        """
+        Downloads a file from a specified URL.
+
+        Parameters:
+        - url (str): URL of the file to download
+        - filename (Path): Local filename to save the file
+        - overwrite (bool): If True, overwrite existing files
+        """
+        if filename.exists() and not overwrite:
+            print(f"{filename} already exists")
         else:
-            url = f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/sub2/nres{self.nres}/delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
-         
-        if((Path(filename).exists())&(overwrite==False)):
-            print(filename, 'already exits')
-        else:
-            wget.download(url,out=filename,bar=wget.bar_adaptive)  
-            print(filename, 'downloaded')
-        
-    def check_files(self,los):
-        
+            wget.download(url, out=str(filename), bar=wget.bar_adaptive)
+            print(f"{filename} downloaded")
+
+    def download_lensing_files(self, zindex, los, overwrite=False):
+        """
+        Downloads lensing files from the specified URL.
+
+        Parameters:
+        - zindex (int): Redshift index
+        - los (int): Line of sight index
+        - overwrite (bool): If True, overwrite existing files
+        """
+        subdir = 'sub1' if los < 54 else 'sub2'
+        url = (f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/{subdir}/nres{self.nres}/'
+               f'allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat')
+        filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.zs{zindex}.mag.dat'
+        self.download_file(url, filename, overwrite)
+
+    def download_density_files(self, los, overwrite=False):
+        """
+        Downloads density files from the specified URL.
+
+        Parameters:
+        - los (int): Line of sight index
+        - overwrite (bool): If True, overwrite existing files
+        """
+        subdir = 'sub1' if los < 54 else 'sub2'
+        url = (f'http://cosmo.phys.hirosaki-u.ac.jp/takahasi/allsky_raytracing/{subdir}/nres{self.nres}/'
+               f'delta_shell_maps/allskymap_nres{self.nres}r{los:03}.delta_shell.dat')
+        filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+        self.download_file(url, filename, overwrite)
+
+    def check_files(self, los):
+        """
+        Checks if all necessary lensing and density files are available for the given line of sight.
+        If not, it attempts to download them.
+
+        Parameters:
+        - los (int): Line of sight index
+        """
         all_files_available = True
-        for zbin in range(self.nzbins):
-            filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{zbin+1}.mag.dat'
-    
-            if(Path(filename).exists()):
-                # print('lensing file '+filename+' already downloaded')
-                continue
-            else:
-                print('downloading lensing file '+filename)
-                self.download_lensing_files(zindex=zbin+1, los=los, overwrite = True)
+        for zbin in range(1, self.nzbins + 1):
+            filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.zs{zbin}.mag.dat'
+            if not filename.exists():
+                print(f'Downloading lensing file {filename}')
+                self.download_lensing_files(zindex=zbin, los=los, overwrite=True)
                 all_files_available = False
-        if(all_files_available):
-            print('all source files available')
-            
-        all_files_available = False 
-        filename = self.download_dir+f'/allskymap_nres{self.nres:02}r{los:03}.delta_shell.dat'
-        if(Path(filename).exists()):
-            all_files_available = True
-        else:
-            print('downloading density file '+filename)
-            download_density_files(los=los,overwrite = True)   
 
-        if(all_files_available):
-            print('density file '+filename+' available')
+        if all_files_available:
+            print('All source files available')
+
+        density_filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+        if not density_filename.exists():
+            print(f'Downloading density file {density_filename}')
+            self.download_density_files(los=los, overwrite=True)
+        else:
+            print(f'Density file {density_filename} available')
 
     def load_maps(self, z, los):
-        
-        filename = self.download_dir+f'/allskymap_nres{self.nres}r{los:03}.zs{z}.mag.dat'
-        
+        """
+        Loads the lensing maps (kappa, gamma1, gamma2) for a given redshift bin and line of sight.
+
+        Parameters:
+        - z (int): Redshift bin index
+        - los (int): Line of sight index
+
+        Returns:
+        - kappa (np.ndarray): Convergence map
+        - gamma1 (np.ndarray): Shear component gamma1
+        - gamma2 (np.ndarray): Shear component gamma2
+        """
+        filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.zs{z}.mag.dat'
+
+        # Skip indices for reading binary data
         skip = [0, 536870908, 1073741818, 1610612728, 2147483638, 2684354547, 3221225457]
-        load_blocks = [skip[i+1]-skip[i] for i in range(0, 6)]
+        load_blocks = [skip[i + 1] - skip[i] for i in range(len(skip) - 1)]
 
         with open(filename, 'rb') as f:
-            rec = np.fromfile(f, dtype='uint32', count=1)[0]
+            # Read headers
+            rec = np.fromfile(f, dtype='uint32', count=1)
             nside = np.fromfile(f, dtype='int32', count=1)[0]
-            self.npix = np.fromfile(f, dtype='int64', count=1)[0]
-            rec = np.fromfile(f, dtype='uint32', count=1)[0]
-            #print("nside:{} self.npix:{}".format(nside, self.npix))
+            npix = np.fromfile(f, dtype='int64', count=1)[0]
+            self.npix = npix  # Update npix
+            np.fromfile(f, dtype='uint32', count=2)  # Skip record markers
 
-            rec = np.fromfile(f, dtype='uint32', count=1)[0]
+            def read_component():
+                data = np.empty(npix, dtype='float32')
+                idx = 0
+                r = npix
+                for l in load_blocks:
+                    blocks = min(l, r)
+                    if blocks <= 0:
+                        break
+                    data[idx:idx + blocks] = np.fromfile(f, dtype='float32', count=blocks)
+                    np.fromfile(f, dtype='uint32', count=2)  # Skip record markers
+                    idx += blocks
+                    r -= blocks
+                return data
 
-            print('load kappa')
-            kappa = np.array([])
-            r = self.npix
-            for i, l in enumerate(load_blocks):
-                blocks = min(l, r)
-                load = np.fromfile(f, dtype='float32', count=blocks)
-                np.fromfile(f, dtype='uint32', count=2)
-                kappa = np.append(kappa, load)
-                r = r-blocks
-                
-                if r == 0:
-                    break
-                elif r > 0 and i == len(load_blocks)-1:
-                    load = np.fromfile(f, dtype='float32', count=r)
-                    np.fromfile(f, dtype='uint32', count=2)
-                    kappa = np.append(kappa, load)
-            print('load gamma1')
-            gamma1 = np.array([])
-            r = self.npix
-            for i, l in enumerate(load_blocks):
-                blocks = min(l, r)
-                load = np.fromfile(f, dtype='float32', count=blocks)
-                np.fromfile(f, dtype='uint32', count=2)
-                gamma1 = np.append(gamma1, load)
-                r = r-blocks
-                if r == 0:
-                    break
-                elif r > 0 and i == len(load_blocks)-1:
-                    load = np.fromfile(f, dtype='float32', count=r)
-                    np.fromfile(f, dtype='uint32', count=2)
-                    gamma1 = np.append(gamma1, load)
+            # Read components
+            kappa = read_component()
+            gamma1 = read_component()
+            gamma2 = read_component()
 
-            print('load gamma2')
-            gamma2 = np.array([])
-            r = self.npix
-            for i, l in enumerate(load_blocks):
-                blocks = min(l, r)
-                load = np.fromfile(f, dtype='float32', count=blocks)
-                np.fromfile(f, dtype='uint32', count=2)
-                gamma2 = np.append(gamma2, load)
-                r = r-blocks
-                if r == 0:
-                    break
-                elif r > 0 and i == len(load_blocks)-1:
-                    load = np.fromfile(f, dtype='float32', count=r)
-                    np.fromfile(f, dtype='uint32', count=2)
-                    gamma2 = np.append(gamma2, load)
+        return kappa, gamma1, gamma2
 
-            return kappa,gamma1,gamma2
+    @staticmethod
+    def rotate_gals(ras, decs, gammas1, gammas2, rotangle, inv=False, units="deg"):
+        """
+        Rotates survey patch so that its center of mass lies at the origin.
 
-                
+        Parameters:
+        - ras (np.ndarray): Right Ascension array
+        - decs (np.ndarray): Declination array
+        - gammas1 (np.ndarray): Shear component gamma1
+        - gammas2 (np.ndarray): Shear component gamma2
+        - rotangle (float): Rotation angle
+        - inv (bool): Whether to perform inverse rotation
+        - units (str): Units of input angles ("deg" or "rad")
 
-    def rotate_gals(self, ras, decs, gammas1, gammas2, rotangle, inv=False, units="deg"):
-        """ Rotates survey patch s.t. its center of mass lies in the origin. """
-        
-        # Map (ra, dec) --> (theta, phi)
-        if units=="deg":
-            decs_rad = decs * np.pi/180.
-            ras_rad = ras * np.pi/180.
-            rotangle_rad = rotangle * np.pi/180.
-        thetas = np.pi/2. + decs_rad
+        Returns:
+        - ra_rot (np.ndarray): Rotated Right Ascension
+        - dec_rot (np.ndarray): Rotated Declination
+        - gamma1_rot (np.ndarray): Rotated shear component gamma1
+        - gamma2_rot (np.ndarray): Rotated shear component gamma2
+        """
+        # Convert to radians if necessary
+        if units == "deg":
+            decs_rad = np.deg2rad(decs)
+            ras_rad = np.deg2rad(ras)
+            rotangle_rad = np.deg2rad(rotangle)
+        else:
+            decs_rad = decs
+            ras_rad = ras
+            rotangle_rad = rotangle
+
+        thetas = np.pi / 2 - decs_rad
         phis = ras_rad
-        
-        # Compute rotation angle
-        thisrot = hp.Rotator(rot=[0,rotangle_rad], deg=False, inv=inv)
-        rotatedthetas, rotatedphis = thisrot(thetas,phis, inv=False)
 
-        gamma_rot = (gammas1+1J*gammas2) * np.exp(1J * 2 * thisrot.angle_ref(rotatedthetas, rotatedphis,inv=True))
-        
-        # Transform back to (ra,dec)
-        ra_rot = rotatedphis
-        dec_rot = rotatedthetas - np.pi/2.
-        if units=="deg":
-            dec_rot *= 180./np.pi
-            ra_rot *= 180./np.pi
-        
+        # Compute rotation
+        rotator = hp.Rotator(rot=[0, rotangle_rad], deg=False, inv=inv)
+        rotated_thetas, rotated_phis = rotator(thetas, phis)
+
+        # Rotate shear components
+        angle = rotator.angle_ref(rotated_thetas, rotated_phis, inv=True)
+        gamma_rot = (gammas1 + 1j * gammas2) * np.exp(2j * angle)
+
+        # Transform back to (ra, dec)
+        ra_rot = rotated_phis
+        dec_rot = np.pi / 2 - rotated_thetas
+        if units == "deg":
+            dec_rot = np.rad2deg(dec_rot)
+            ra_rot = np.rad2deg(ra_rot)
+
         return ra_rot, dec_rot, gamma_rot.real, gamma_rot.imag
 
+    def create_lensing_maps(self, los):
+        """
+        Creates lensing maps (gamma1, gamma2, kappa) for all source bins by summing over redshift bins.
 
-    def create_lensing_maps(self,los):
+        Parameters:
+        - los (int): Line of sight index
+        """
+        self.npix = hp.nside2npix(self.nside)
+        kappa_allbins = np.zeros((self.nsbins, self.npix), dtype=np.float32)
+        gamma1_allbins = np.zeros((self.nsbins, self.npix), dtype=np.float32)
+        gamma2_allbins = np.zeros((self.nsbins, self.npix), dtype=np.float32)
 
-        self.npix = hp.nside2self.npix(self.nside)
-        kappa_allbins = np.array([np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix)])
-        gamma1_allbins = np.array([np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix)])
-        gamma2_allbins = np.array([np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix),np.zeros(self.npix)])
-        for zbin in range(self.nzbins):
-            print('loading ',zbin+1,los)
-            kappa_zbin,gamma1_zbin,gamma2_zbin=self.load_maps(z=zbin+1,los=los)
-            for sbin in range(self.nsbins):
-                kappa_allbins[sbin-1]=kappa_allbins[sbin-1]+kappa_zbin*self.Nz_persbin_weights[sbin][zbin]
-                gamma1_allbins[sbin-1]=gamma1_allbins[sbin-1]+gamma1_zbin*self.Nz_persbin_weights[sbin][zbin]
-                gamma2_allbins[sbin-1]=gamma2_allbins[sbin-1]+gamma2_zbin*self.Nz_persbin_weights[sbin][zbin]
-            
-            del kappa_zbin
-            del gamma1_zbin
-            del gamma2_zbin
+        for zbin in tqdm(range(self.nzbins), desc="Loading redshift bins"):
+            kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
+            if np.any(np.isnan([kappa_zbin, gamma1_zbin, gamma2_zbin])):
+                print(f'Lens maps have NaNs in redshift bin {zbin + 1}')
 
-        for sbin in range(self.nsbins):           
-            hp.fitsfunc.write_map(self.output_dir+'/gamma1_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin+1)+'_'+str(los)+'.fits', gamma1_allbins[sbin],dtype=np.float32,overwrite=True)
-            hp.fitsfunc.write_map(self.output_dir+'/gamma2_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin+1)+'_'+str(los)+'.fits', gamma2_allbins[sbin],dtype=np.float32,overwrite=True)
-            hp.fitsfunc.write_map(self.output_dir+'/kappa_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin+1)+'_'+str(los)+'.fits', kappa_allbins[sbin],dtype=np.float32,overwrite=True)
+            weights = self.Nz_persbin_weights[:, zbin][:, np.newaxis]
+            kappa_allbins += weights * kappa_zbin
+            gamma1_allbins += weights * gamma1_zbin
+            gamma2_allbins += weights * gamma2_zbin
 
-        print('finished writing shear maps ',los)
-        
-    def loading_shear_maps(self,sbin,los):
+        for sbin in range(self.nsbins):
+            hp.write_map(self.output_dir / f'gamma1_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                         gamma1_allbins[sbin], dtype=np.float32, overwrite=True)
+            hp.write_map(self.output_dir / f'gamma2_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                         gamma2_allbins[sbin], dtype=np.float32, overwrite=True)
+            hp.write_map(self.output_dir / f'kappa_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                         kappa_allbins[sbin], dtype=np.float32, overwrite=True)
 
-        gamma1 = hp.read_map(self.output_dir+'/gamma1_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin)+'_'+str(los)+'.fits')
-        gamma2 = hp.read_map(self.output_dir+'/gamma2_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin)+'_'+str(los)+'.fits')
-        kappa = hp.read_map(self.output_dir+'/kappa_nside'+str(self.nside)+'_KiDS1000_tomobin'+str(sbin)+'_'+str(los)+'.fits')
-            
-        print('finished loading shear maps ',los,sbin)
+        print(f'Finished writing shear maps for LOS {los}')
 
-        return gamma1,gamma2,kappa
-    
-    
-    def add_noise_obs(self, g1, g2, eps1, eps2):
-        # Apply reduced shear and check which trafo to use
-        g = g1+1J*g2
-        toobig = np.abs(g)>=1
+    def loading_shear_maps(self, sbin, los):
+        """
+        Loads the shear and convergence maps for a given source bin and line of sight.
 
-        eps_int = eps1 + 1J*eps2
-        eps_int = eps_int*np.exp(-2*1j*np.random.uniform(0,2*np.pi,size=len(eps_int)))
-    
-        epsilon_obs = np.ones(len(eps1))+1j*np.ones(len(eps1))
-        epsilon_obs[~toobig] = (g[~toobig] + eps_int[~toobig])/(1 + g[~toobig].conj()*eps_int[~toobig])
-        epsilon_obs[toobig] = (1 + g[toobig]*eps_int[toobig].conj())/(g[toobig].conj() + eps_int[toobig].conj())
-        
-        return epsilon_obs.real, epsilon_obs.imag  
-    
-    
+        Parameters:
+        - sbin (int): Source bin index
+        - los (int): Line of sight index
+
+        Returns:
+        - gamma1 (np.ndarray): Shear component gamma1
+        - gamma2 (np.ndarray): Shear component gamma2
+        - kappa (np.ndarray): Convergence map
+        """
+        gamma1 = hp.read_map(self.output_dir / f'gamma1_nside{self.nside}_tomobin{sbin}_{los}.fits')
+        gamma2 = hp.read_map(self.output_dir / f'gamma2_nside{self.nside}_tomobin{sbin}_{los}.fits')
+        kappa = hp.read_map(self.output_dir / f'kappa_nside{self.nside}_tomobin{sbin}_{los}.fits')
+
+        print(f'Finished loading shear maps for LOS {los}, bin {sbin}')
+
+        return gamma1, gamma2, kappa
+
+    @staticmethod
+    def add_noise_obs(g1, g2, eps1, eps2):
+        """
+        Adds observational noise to the reduced shear, incorporating intrinsic ellipticity.
+
+        Parameters:
+        - g1 (np.ndarray): Reduced shear component g1
+        - g2 (np.ndarray): Reduced shear component g2
+        - eps1 (np.ndarray): Intrinsic ellipticity component e1
+        - eps2 (np.ndarray): Intrinsic ellipticity component e2
+
+        Returns:
+        - e1_obs (np.ndarray): Observed ellipticity component e1
+        - e2_obs (np.ndarray): Observed ellipticity component e2
+        """
+        g = g1 + 1j * g2
+        mask = np.abs(g) < 1
+
+        eps_int = (eps1 + 1j * eps2) * np.exp(-2j * np.random.uniform(0, 2 * np.pi, size=len(eps1)))
+        epsilon_obs = np.empty_like(eps_int)
+
+        # For |g| < 1
+        epsilon_obs[mask] = (g[mask] + eps_int[mask]) / (1 + np.conj(g[mask]) * eps_int[mask])
+
+        # For |g| >= 1
+        epsilon_obs[~mask] = (1 + g[~mask] * np.conj(eps_int[~mask])) / (np.conj(g[~mask]) + np.conj(eps_int[~mask]))
+
+        return epsilon_obs.real, epsilon_obs.imag
+
     def create_real_shear_catalogue(self, sbin, los, ra_sources, dec_sources, e_1_rot, e_2_rot, weights):
+        """
+        Creates a shear catalogue by applying shear to the source galaxies and adding noise.
 
-        gamma1,gamma2,kappa  = self.loading_shear_maps(sbin,los)
-        
-        pix_center_rot = hp.ang2pix(nside=self.nside,theta=ra_sources,phi=dec_sources,lonlat=True)
+        Parameters:
+        - sbin (int): Source bin index
+        - los (int): Line of sight index
+        - ra_sources (np.ndarray): Right Ascension of sources
+        - dec_sources (np.ndarray): Declination of sources
+        - e_1_rot (np.ndarray): Rotated intrinsic ellipticity component e1
+        - e_2_rot (np.ndarray): Rotated intrinsic ellipticity component e2
+        - weights (np.ndarray): Weights for the sources
 
-        kappa_center_values = kappa[pix_center_rot]
-        gamma1_center_values = gamma1[pix_center_rot]
-        gamma2_center_values = gamma2[pix_center_rot]
-        
-        g1,g2 = gamma1/(1-kappa),gamma2/(1-kappa)
-        
-        e1_obs,e2_obs=self.add_noise_obs(g1=g1, g2=g2, eps1=e_1_rot, eps2=e_2_rot)
+        Returns:
+        - gamma_table (Table): Astropy Table containing shear catalogue
+        """
+        # Load shear maps
+        gamma1_map, gamma2_map, kappa_map = self.loading_shear_maps(sbin, los)
 
-        gamma_table = Table()
-        gamma_table.add_column(ra_sources.astype(np.float32),name=r'ra')
-        gamma_table.add_column(dec_sources.astype(np.float32),name=r'dec')
-        gamma_table.add_column(kappa_center_values.astype(np.float32),name=r'kappa center')
-        gamma_table.add_column(gamma1_center_values.astype(np.float32),name=r'gamma1 center')
-        gamma_table.add_column(gamma2_center_values.astype(np.float32),name=r'gamma2 center')
-        gamma_table.add_column(e1_obs.real.astype(np.float32),name=r'eobs1 center')
-        gamma_table.add_column(e2_obs.imag.astype(np.float32),name=r'eobs2 center')
-        gamma_table.add_column(weights.astype(np.float32),name=r'weights')
-        
+        # Find HEALPix pixels corresponding to source positions
+        pix_indices = hp.ang2pix(nside=self.nside, theta=ra_sources, phi=dec_sources, lonlat=True)
+
+        # Get shear and convergence values at source positions
+        kappa_values = kappa_map[pix_indices]
+        gamma1_values = gamma1_map[pix_indices]
+        gamma2_values = gamma2_map[pix_indices]
+
+        # Compute reduced shear
+        g1 = gamma1_values / (1 - kappa_values)
+        g2 = gamma2_values / (1 - kappa_values)
+
+        # Add observational noise
+        e1_obs, e2_obs = self.add_noise_obs(g1, g2, e_1_rot, e_2_rot)
+
+        # Create an Astropy Table to store the data
+        gamma_table = Table({
+            'ra': ra_sources.astype(np.float32),
+            'dec': dec_sources.astype(np.float32),
+            'kappa': kappa_values.astype(np.float32),
+            'gamma1': gamma1_values.astype(np.float32),
+            'gamma2': gamma2_values.astype(np.float32),
+            'eobs1': e1_obs.astype(np.float32),
+            'eobs2': e2_obs.astype(np.float32),
+            'weights': weights.astype(np.float32)
+        })
+
         return gamma_table
-    
-    
-    def compute_T17_Nz(self,z_persbin,Nz_persbin):
-    
+
+    def compute_T17_Nz(self, z_persbin, Nz_persbin):
+        """
+        Computes the number of galaxies per redshift bin for the T17 (Takashi et al.) source distribution.
+
+        Parameters:
+        - z_persbin: Redshift bin edges per source bin
+        - Nz_persbin: Number of galaxies per source bin
+
+        Sets:
+        - self.zbins: Array of redshift bins
+        - self.N_T17_persbin: Number of galaxies per T17 redshift bin per source bin
+        - self.nzbins: Number of redshift bins
+        - self.Nz_persbin_weights: Normalized weights per redshift bin per source bin
+        """
+        # Load redshift bins from file
         zbins = np.loadtxt('nofz/nofz_takashi_zbins.dat')
           
         N_T17_persbin = []      
@@ -272,25 +350,25 @@ class lensing_cov():
             nzfine = []
 
             fine_grid = 100000
-            zfine = np.linspace(z_persbin[sbin][0],z_persbin[sbin][1],fine_grid) 
+            zfine = np.linspace(z_persbin[sbin][0], z_persbin[sbin][1], fine_grid) 
             print(sbin)
         
-            nzfine = np.ones(fine_grid)*Nz_persbin[sbin][0]/fine_grid 
+            nzfine = np.ones(fine_grid) * Nz_persbin[sbin][0] / fine_grid 
                 
             for i in range(len(z_persbin[sbin])-2):
-                zfine = np.concatenate((zfine,np.linspace(z_persbin[sbin][i+1],z_persbin[sbin][i+2],fine_grid)[1:]))
-                nzfine = np.concatenate((nzfine,np.ones(fine_grid-1)*Nz_persbin[sbin][i+1]/(fine_grid-1)))
+                zfine = np.concatenate((zfine, np.linspace(z_persbin[sbin][i+1], z_persbin[sbin][i+2], fine_grid)[1:]))
+                nzfine = np.concatenate((nzfine, np.ones(fine_grid-1) * Nz_persbin[sbin][i+1] / (fine_grid-1)))
                 
             N_T17 = []
             for j in range(len(zbins)):
-                if(zbins[j,1]>zfine[-1]):
+                if(zbins[j,1] > zfine[-1]):
                     N_T17.append(0)
-                elif(zbins[j,2]>zfine[-1]):
-                    lower_edge = np.where(zbins[j,1]>zfine)[0][-1]
+                elif(zbins[j,2] > zfine[-1]):
+                    lower_edge = np.where(zbins[j,1] > zfine)[0][-1]
                     N_T17.append(np.sum(nzfine[lower_edge:]))
                 else: 
-                    lower_edge = np.where(zbins[j,1]>zfine)[0][-1]
-                    upper_edge = np.where(zbins[j,2]>zfine)[0][-1]
+                    lower_edge = np.where(zbins[j,1] > zfine)[0][-1]
+                    upper_edge = np.where(zbins[j,2] > zfine)[0][-1]
                     N_T17.append(np.sum(nzfine[lower_edge:upper_edge]))
 
             N_T17_persbin.append(N_T17)
@@ -299,167 +377,197 @@ class lensing_cov():
         self.N_T17_persbin = np.array(N_T17_persbin)
         self.nzbins = len(zbins)
         
+        # Normalize weights
         weights = []
         for i in range(self.nsbins):
-            weights.append(self.N_T17_persbin[i]/np.sum(self.N_T17_persbin[i]))
+            weights.append(self.N_T17_persbin[i] / np.sum(self.N_T17_persbin[i]))
         self.Nz_persbin_weights = np.array(weights)       
+    
+    
 
+    def create_gal_positions(self, los, random_seed=42):
+        """
+        Creates galaxy positions by sampling from the density field.
 
-    def create_gal_positions(self,los, random_seed = 42):
-        
+        Parameters:
+        - los (int): Line of sight index
+        - random_seed (int): Seed for random number generator
+        """
         np.random.seed(random_seed)
-        
-        fname = self.download_dir+f'/allskymap_nres{self.nres:02}r{los:03}.delta_shell.dat'
-        
-        mu_mean = self.N_T17_persbin/self.npix
 
-        self.pixel_perzbin_persbin = []
-        self.ra_sources_perzbin_persbin = []
-        self.dec_sources_perzbin_persbin = []
+        fname = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+
+        mu_mean = self.N_T17_persbin / self.npix
+
+        self.pixel_perzbin_persbin = [[] for _ in range(self.nzbins)]
+        self.ra_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
+        self.dec_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
 
         with open(fname, 'rb') as f:
-            for i in tqdm(range(self.N_T17_persbin.shape[1])):
-                kplane = int.from_bytes(f.read(4), 'little')  # Read kplane
-                delta_shell = np.frombuffer(f.read(self.npix * 4), dtype=np.float32)  # Read delta_shell
-                
-                pixel_perzbin = []
-                ra_sources_perzbin = []
-                dec_sources_perzbin = []
+            for i in tqdm(range(self.nzbins), desc="Reading density shells"):
+                kplane = int.from_bytes(f.read(4), 'little')
+                delta_shell = np.frombuffer(f.read(self.npix * 4), dtype=np.float32)
 
                 for sbin in range(self.nsbins):
-                    mu = mu_mean[sbin][i] * 2 * (1.0 + 1.0 * delta_shell)
+                    mu = mu_mean[sbin, i] * 2 * (1 + delta_shell)
                     ngal = np.random.poisson(mu)
-                    ipix = np.where(ngal>0)[0]
-                    if(len(ipix)>0):
-                        ipix = np.repeat(ipix, ngal[ipix])
-                        # print(len(ipix),self.N_T17_persbin[sbin][i])
-                        ipix = np.random.choice(range(len(ipix)),int(round(self.N_T17_persbin[sbin][i],0)),replace=False)
-                        
-                        ra,dec = hp.pix2ang(nside=2**12,ipix=ipix,lonlat=True)
-                        
-                        pixel_perzbin.append(ipix)
-                        ra_sources_perzbin.append(ra)
-                        dec_sources_perzbin.append(dec)
+                    ipix = np.repeat(np.arange(self.npix), ngal)
+                    if ipix.size > 0:
+                        selected = np.random.choice(ipix, int(round(self.N_T17_persbin[sbin, i])), replace=False)
+                        ra, dec = hp.pix2ang(nside=self.nside, ipix=selected, lonlat=True)
                     else:
-                        pixel_perzbin.append([])
-                        ra_sources_perzbin.append([])
-                        dec_sources_perzbin.append([])
-                        
-                self.pixel_perzbin_persbin.append(pixel_perzbin) 
-                self.ra_sources_perzbin_persbin.append(ra_sources_perzbin) 
-                self.dec_sources_perzbin_persbin.append(dec_sources_perzbin) 
-       
-    
-                     
-    
-    def add_noise_sigma(self, g1, g2, epsilon_cov, epsilon_mean, epsilon_generator, random_seed = 42):
-        
+                        selected, ra, dec = [], [], []
+
+                    self.pixel_perzbin_persbin[i].append(selected)
+                    self.ra_sources_perzbin_persbin[i].append(ra)
+                    self.dec_sources_perzbin_persbin[i].append(dec)
+
+    def add_noise_sigma(self, g1, g2, epsilon_cov=None, epsilon_mean=None, epsilon_data=None, random_seed=42):
+        """
+        Adds noise to the shear measurements using a given covariance matrix or a KDE generator.
+
+        Parameters:
+        - g1, g2 (np.ndarray): Reduced shear components
+        - epsilon_cov (np.ndarray): Covariance matrix for intrinsic ellipticity
+        - epsilon_mean (np.ndarray): Mean of intrinsic ellipticity
+        - epsilon_data (np.ndarray): Data for KDE estimation of intrinsic ellipticity
+        - random_seed (int): Seed for random number generator
+
+        Returns:
+        - e1_obs (np.ndarray): Observed ellipticity component e1
+        - e2_obs (np.ndarray): Observed ellipticity component e2
+        - weights (np.ndarray): Weights associated with the samples
+        """
         np.random.seed(random_seed)
-        
-        g = g1+1j*g2
-        g_bigger1 = np.abs(g)>=1
-        g_smaller1 = np.abs(g)<1
-        
-        if(epsilon_generator):
-            epsilon1,epsilon2,weight_bigger1 = epsilon_generator.sample(np.sum(g_bigger1),random_state=random_seed).T
-            eps_int_bigger1 = epsilon1+1j*epsilon2
 
-            epsilon1,epsilon2,weight_smaller1 = epsilon_generator.sample(np.sum(g_smaller1),random_state=random_seed).T
-            eps_int_smaller1 = epsilon1+1j*epsilon2
+        g = g1 + 1j * g2
+        mask = np.abs(g) < 1
+
+        if epsilon_data is not None:
+            epsilon_generator = KernelDensity(kernel='gaussian', bandwidth=0.001).fit(epsilon_data.T)
+            eps1_eps2 = epsilon_generator.sample(len(g), random_state=random_seed)
+            weights = eps1_eps2[:, 2]
+            eps_int = eps1_eps2[:, 0] + 1j * eps1_eps2[:, 1]
         else:
-            epsilon1,epsilon2,weight_bigger1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_bigger1))
-            eps_int_bigger1 = epsilon1+1j*epsilon2
+            eps_int = np.random.multivariate_normal(epsilon_mean, epsilon_cov, len(g)).view(np.complex128).flatten()
+            weights = np.ones(len(g))
 
-            epsilon1,epsilon2,weight_smaller1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_smaller1))
-            eps_int_smaller1 = epsilon1+1j*epsilon2
+        epsilon_obs = np.empty_like(eps_int)
 
-        epsilon_obs = np.ones(len(g1))+1j*np.ones(len(g2))
+        # Apply transformations
+        epsilon_obs[mask] = (g[mask] + eps_int[mask]) / (1 + np.conj(g[mask]) * eps_int[mask])
+        epsilon_obs[~mask] = (1 + g[~mask] * np.conj(eps_int[~mask])) / (np.conj(g[~mask]) + np.conj(eps_int[~mask]))
 
-        epsilon_obs[g_smaller1] = (g[g_smaller1] + eps_int_smaller1)/(1 + g[g_smaller1].conj()*eps_int_smaller1)
-        epsilon_obs[g_bigger1] = (1 + g[g_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1].conj() + eps_int_bigger1.conj())
-        weights = np.ones(len(g1))
-        weights[g_smaller1] = weight_smaller1
-        weights[g_bigger1] = weight_bigger1
-        
-        while(np.sum(np.abs(epsilon_obs)>=1)>0):
-            print(np.sum(np.abs(epsilon_obs)>=1))
-            eobs_bigger1 = np.abs(epsilon_obs[g_bigger1])>=1
-            eobs_smaller1 = np.abs(epsilon_obs[g_smaller1])>=1
-            
-            if(epsilon_generator):
-                epsilon1,epsilon2,weight_bigger1 = epsilon_generator.sample(np.sum(g_bigger1),random_state=random_seed).T
-                eps_int_bigger1 = epsilon1+1j*epsilon2
-
-                epsilon1,epsilon2,weight_smaller1 = epsilon_generator.sample(np.sum(g_smaller1),random_state=random_seed).T
-                eps_int_smaller1 = epsilon1+1j*epsilon2
+        # Ensure that observed ellipticity magnitude is less than 1
+        invalid = np.abs(epsilon_obs) >= 1
+        max_iterations = 10
+        iterations = 0
+        while np.any(invalid) and iterations < max_iterations:
+            if epsilon_data is not None:
+                eps1_eps2 = epsilon_generator.sample(np.sum(invalid), random_state=random_seed)
+                eps_int_new = eps1_eps2[:, 0] + 1j * eps1_eps2[:, 1]
+                weights[invalid] = eps1_eps2[:, 2]
             else:
-                epsilon1,epsilon2,weight_bigger1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_bigger1))
-                eps_int_bigger1 = epsilon1+1j*epsilon2
+                eps_int_new = np.random.multivariate_normal(epsilon_mean, epsilon_cov, np.sum(invalid)).view(
+                    np.complex128).flatten()
 
-                epsilon1,epsilon2,weight_smaller1 = np.random.multivariate_normal(epsilon_mean,epsilon_cov,np.sum(g_smaller1))
-                eps_int_smaller1 = epsilon1+1j*epsilon2
-                
-            epsilon_obs[np.where(g_smaller1)[0][eobs_smaller1]] = (g[g_smaller1][eobs_smaller1] + eps_int_smaller1)/(1 + g[g_smaller1][eobs_smaller1].conj()*eps_int_smaller1)
-            epsilon_obs[np.where(g_bigger1)[0][eobs_bigger1]] = (1 + g[g_bigger1][eobs_bigger1]*eps_int_bigger1.conj())/(g[g_bigger1][eobs_bigger1].conj() + eps_int_bigger1.conj())
+            idx_invalid = np.where(invalid)[0]
+            mask_invalid = mask[invalid]
+            g_invalid = g[invalid]
+            eps_obs_new = np.empty_like(eps_int_new)
 
-            weights[g_smaller1] = weight_smaller1
-            weights[g_bigger1] = weight_bigger1
-        
-        return epsilon_obs.real, epsilon_obs.imag, weights 
-    
-    
-    
-    
-    def combine_sourceplanes(self,los):
-        
-        self.kappa_allbins  = [[] for i in range(self.nsbins)]
-        self.gamma1_allbins  = [[] for i in range(self.nsbins)]
-        self.gamma2_allbins  = [[] for i in range(self.nsbins)]
-        self.ra_allbins  = [[] for i in range(self.nsbins)]
-        self.dec_allbins  = [[] for i in range(self.nsbins)]
-        
-        for zbin in range(self.nzbins):
-            print('loading ',zbin+1,los)
-            kappa_zbin,gamma1_zbin,gamma2_zbin=self.load_maps(z=zbin+1,los=los)
+            eps_obs_new[mask_invalid] = (g_invalid[mask_invalid] + eps_int_new[mask_invalid]) / (
+                    1 + np.conj(g_invalid[mask_invalid]) * eps_int_new[mask_invalid])
+            eps_obs_new[~mask_invalid] = (1 + g_invalid[~mask_invalid] * np.conj(eps_int_new[~mask_invalid])) / (
+                    np.conj(g_invalid[~mask_invalid]) + np.conj(eps_int_new[~mask_invalid]))
+
+            epsilon_obs[invalid] = eps_obs_new
+            invalid = np.abs(epsilon_obs) >= 1
+            iterations += 1
+
+            if iterations == max_iterations:
+                raise RuntimeError("Maximum iterations reached while ensuring |epsilon_obs| < 1")
+
+        return epsilon_obs.real, epsilon_obs.imag, weights
+
+    def combine_source_planes(self, los):
+        """
+        Combines the source planes by stacking the shear and convergence maps across redshift bins.
+
+        Parameters:
+        - los (int): Line of sight index
+        """
+        self.kappa_allbins = [[] for _ in range(self.nsbins)]
+        self.gamma1_allbins = [[] for _ in range(self.nsbins)]
+        self.gamma2_allbins = [[] for _ in range(self.nsbins)]
+        self.ra_allbins = [[] for _ in range(self.nsbins)]
+        self.dec_allbins = [[] for _ in range(self.nsbins)]
+
+        for zbin in tqdm(range(self.nzbins), desc="Combining source planes"):
+            kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
+            if np.any(np.isnan([kappa_zbin, gamma1_zbin, gamma2_zbin])):
+                print(f'Lens maps have NaNs in redshift bin {zbin + 1}')
+
             for sbin in range(self.nsbins):
-                    pix_center = self.pixel_perzbin_persbin[zbin][sbin]
-                    self.kappa_allbins[sbin] = np.concatenate((self.kappa_allbins[sbin],kappa_zbin[pix_center]))
-                    self.gamma1_allbins[sbin] = np.concatenate((self.gamma1_allbins[sbin],gamma1_zbin[pix_center]))
-                    self.gamma2_allbins[sbin] = np.concatenate((self.gamma2_allbins[sbin],gamma2_zbin[pix_center]))
-                    self.ra_allbins[sbin] = np.concatenate((self.ra_allbins[sbin],self.ra_sources_perzbin_persbin[zbin][sbin]))
-                    self.dec_allbins[sbin] = np.concatenate((self.dec_allbins[sbin],self.dec_sources_perzbin_persbin[zbin][sbin]))
+                pix_indices = self.pixel_perzbin_persbin[zbin][sbin]
+                if len(pix_indices) == 0:
+                    continue
+                self.kappa_allbins[sbin].append(kappa_zbin[pix_indices])
+                self.gamma1_allbins[sbin].append(gamma1_zbin[pix_indices])
+                self.gamma2_allbins[sbin].append(gamma2_zbin[pix_indices])
+                self.ra_allbins[sbin].append(self.ra_sources_perzbin_persbin[zbin][sbin])
+                self.dec_allbins[sbin].append(self.dec_sources_perzbin_persbin[zbin][sbin])
 
-    
-    def create_sigma_shear_catalogue(self, los, sbin, epsilon_cov=None, epsilon_mean=None, epsilon_data=[], random_seed = 42):
-        
-        gamma_table = Table()     
-        
+        # Concatenate lists into arrays
+        for sbin in range(self.nsbins):
+            self.kappa_allbins[sbin] = np.concatenate(self.kappa_allbins[sbin])
+            self.gamma1_allbins[sbin] = np.concatenate(self.gamma1_allbins[sbin])
+            self.gamma2_allbins[sbin] = np.concatenate(self.gamma2_allbins[sbin])
+            self.ra_allbins[sbin] = np.concatenate(self.ra_allbins[sbin])
+            self.dec_allbins[sbin] = np.concatenate(self.dec_allbins[sbin])
+
+    def create_sigma_shear_catalogue(self, los, sbin, epsilon_cov=None, epsilon_mean=None, epsilon_data=None,
+                                     random_seed=42):
+        """
+        Creates a shear catalogue for the given source bin by adding noise to the shear maps.
+
+        Parameters:
+        - los (int): Line of sight index
+        - sbin (int): Source bin index
+        - epsilon_cov (np.ndarray): Covariance matrix for intrinsic ellipticity
+        - epsilon_mean (np.ndarray): Mean of intrinsic ellipticity
+        - epsilon_data (np.ndarray): Data for KDE estimation of intrinsic ellipticity
+        - random_seed (int): Seed for random number generator
+
+        Returns:
+        - gamma_table (Table): Astropy Table containing the shear catalogue
+        """
         kappa = self.kappa_allbins[sbin]
         gamma1 = self.gamma1_allbins[sbin]
         gamma2 = self.gamma2_allbins[sbin]
         ra = self.ra_allbins[sbin]
         dec = self.dec_allbins[sbin]
-        
-        g1,g2 = gamma1/(1-kappa),gamma2/(1-kappa)
-        
-        if(len(epsilon_data)>0):
-            epsilon_generator = KernelDensity(kernel='gaussian', bandwidth=0.001)
-            epsilon_generator.fit(epsilon_data.T)
-        else:
-            epsilon_generator = None
 
-        e1_obs,e2_obs=self.add_noise_sigma(g1=g1, g2=g2, epsilon_cov=epsilon_cov, epsilon_mean=epsilon_mean, epsilon_generator=epsilon_generator, random_seed=random_seed)
-    
-        gamma_table.add_column(ra.astype(np.float32),name=r'ra sbin'+str(sbin))
-        gamma_table.add_column(dec.astype(np.float32),name=r'dec sbin'+str(sbin))
-        gamma_table.add_column(kappa.astype(np.float32),name=r'kappa sbin'+str(sbin))
-        gamma_table.add_column(gamma1.astype(np.float32),name=r'gamma1 sbin'+str(sbin))
-        gamma_table.add_column(gamma2.astype(np.float32),name=r'gamma2 sbin'+str(sbin))
-        gamma_table.add_column(e1_obs.real.astype(np.float32),name=r'eobs1 sbin'+str(sbin))
-        gamma_table.add_column(e2_obs.imag.astype(np.float32),name=r'eobs2 sbin'+str(sbin))
+        # Compute reduced shear
+        g1 = gamma1 / (1 - kappa)
+        g2 = gamma2 / (1 - kappa)
 
-        
+        # Add noise to shear
+        e1_obs, e2_obs, weights = self.add_noise_sigma(
+            g1, g2, epsilon_cov=epsilon_cov, epsilon_mean=epsilon_mean,
+            epsilon_data=epsilon_data, random_seed=random_seed
+        )
+
+        # Create Astropy Table
+        gamma_table = Table({
+            'ra': ra.astype(np.float32),
+            'dec': dec.astype(np.float32),
+            'kappa': kappa.astype(np.float32),
+            'gamma1': gamma1.astype(np.float32),
+            'gamma2': gamma2.astype(np.float32),
+            'eobs1': e1_obs.astype(np.float32),
+            'eobs2': e2_obs.astype(np.float32),
+            'weights': weights.astype(np.float32)
+        })
+
         return gamma_table
-
-
-
