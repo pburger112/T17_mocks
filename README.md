@@ -8,18 +8,10 @@ A Python class designed for generating mock lensing data, particularly for creat
 ## Table of Contents
 
 - [Features](#features)
-- [Installation](#installation)
 - [Dependencies](#dependencies)
 - [Data Downloads](#data-downloads)
-- [Usage](#usage)
-  - [Initialization](#initialization)
-  - [Downloading Files](#downloading-files)
-  - [Creating Lensing Maps](#creating-lensing-maps)
-  - [Generating Galaxy Positions](#generating-galaxy-positions)
-  - [Creating Shear Catalogs](#creating-shear-catalogs)
-- [Example](#example)
 - [Contributing](#contributing)
-- [License](#license)
+
 
 ## Features
 
@@ -60,10 +52,3 @@ To contribute:
 3. Commit your changes with clear messages.
 4. Push to your fork and submit a pull request.
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-**Note**: Replace placeholder paths, URLs, and variable values with actual ones relevant to your project. Ensure that you have the necessary permissions to use and distribute the simulation data from Takahashi et al.
