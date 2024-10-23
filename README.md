@@ -1,4 +1,3 @@
-Sure! Below is a `README.md` file for the provided code. This README includes an overview of the `LensingCov` class, installation instructions, usage examples, and information about dependencies.
 
 ---
 
