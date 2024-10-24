@@ -351,7 +351,6 @@ class LensingMocks:
 
             fine_grid = 100000
             zfine = np.linspace(z_persbin[sbin][0], z_persbin[sbin][1], fine_grid) 
-            print(sbin)
         
             nzfine = np.ones(fine_grid) * Nz_persbin[sbin][0] / fine_grid 
                 
@@ -402,6 +401,7 @@ class LensingMocks:
         self.pixel_perzbin_persbin = [[] for _ in range(self.nzbins)]
         self.ra_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
         self.dec_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
+        self.redshift_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
 
         with open(fname, 'rb') as f:
             for i in tqdm(range(self.nzbins), desc="Reading density shells"):
@@ -415,12 +415,15 @@ class LensingMocks:
                     if ipix.size > 0:
                         selected = np.random.choice(ipix, int(round(self.N_T17_persbin[sbin, i])), replace=False)
                         ra, dec = hp.pix2ang(nside=self.nside, ipix=selected, lonlat=True)
+                        redshift = np.ones_like(ra)*self.zbins[i,0]
                     else:
                         selected, ra, dec = [], [], []
+                        redshift = []
 
                     self.pixel_perzbin_persbin[i].append(selected)
                     self.ra_sources_perzbin_persbin[i].append(ra)
                     self.dec_sources_perzbin_persbin[i].append(dec)
+                    self.redshift_sources_perzbin_persbin[i].append(redshift)
 
     def add_noise_sigma(self, g1, g2, epsilon_cov=None, epsilon_mean=None, epsilon_data=None, random_seed=42):
         """
@@ -502,6 +505,7 @@ class LensingMocks:
         self.gamma2_allbins = [[] for _ in range(self.nsbins)]
         self.ra_allbins = [[] for _ in range(self.nsbins)]
         self.dec_allbins = [[] for _ in range(self.nsbins)]
+        self.redshift_allbins = [[] for _ in range(self.nsbins)]
 
         for zbin in tqdm(range(self.nzbins), desc="Combining source planes"):
             kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
@@ -517,6 +521,7 @@ class LensingMocks:
                 self.gamma2_allbins[sbin].append(gamma2_zbin[pix_indices])
                 self.ra_allbins[sbin].append(self.ra_sources_perzbin_persbin[zbin][sbin])
                 self.dec_allbins[sbin].append(self.dec_sources_perzbin_persbin[zbin][sbin])
+                self.redshift_allbins[sbin].append(self.redshift_sources_perzbin_persbin[zbin][sbin])
 
         # Concatenate lists into arrays
         for sbin in range(self.nsbins):
@@ -525,6 +530,7 @@ class LensingMocks:
             self.gamma2_allbins[sbin] = np.concatenate(self.gamma2_allbins[sbin])
             self.ra_allbins[sbin] = np.concatenate(self.ra_allbins[sbin])
             self.dec_allbins[sbin] = np.concatenate(self.dec_allbins[sbin])
+            self.redshift_allbins[sbin] = np.concatenate(self.redshift_allbins[sbin])
 
     def create_sigma_shear_catalogue(self, los, sbin, epsilon_cov=None, epsilon_mean=None, epsilon_data=None,
                                      random_seed=42):
@@ -547,6 +553,7 @@ class LensingMocks:
         gamma2 = self.gamma2_allbins[sbin]
         ra = self.ra_allbins[sbin]
         dec = self.dec_allbins[sbin]
+        redshift = self.redshift_allbins[sbin]
 
         # Compute reduced shear
         g1 = gamma1 / (1 - kappa)
@@ -562,6 +569,7 @@ class LensingMocks:
         gamma_table = Table({
             'ra': ra.astype(np.float32),
             'dec': dec.astype(np.float32),
+            'redshift': redshift.astype(np.float32),
             'kappa': kappa.astype(np.float32),
             'gamma1': gamma1.astype(np.float32),
             'gamma2': gamma2.astype(np.float32),
