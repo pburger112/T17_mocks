@@ -5,14 +5,17 @@ from pathlib import Path
 from sklearn.neighbors import KernelDensity  # For density estimation
 import wget  # For downloading files
 from tqdm import tqdm  # For progress bars
-
+import psutil
+import tensorflow as tf
+import time
+import gc
 
 class LensingMocks:
     """
     A class for handling lensing covariance computations.
     """
 
-    def __init__(self, download_dir, output_dir, nres, nsbins):
+    def __init__(self, download_dir, output_dir, nres, nsbins, seed=42):
         """
         Initializes directories, resolution, and number of bins.
 
@@ -28,6 +31,15 @@ class LensingMocks:
         self.nside = 2 ** self.nres
         self.npix = hp.nside2npix(nside=self.nside)
         self.nsbins = nsbins
+        
+        zbins = np.loadtxt('nofz/nofz_takashi_zbins.dat')
+        self.nzbins = len(zbins)
+        
+        tf.random.set_seed(seed)
+        np.random.seed(seed)
+        
+        self.ra_pix, self.dec_pix = hp.pix2ang(nside=self.nside, ipix=np.arange(self.npix), lonlat=True)
+
 
     def download_file(self, url, filename, overwrite):
         """
@@ -384,7 +396,7 @@ class LensingMocks:
     
     
 
-    def create_gal_positions(self, los, random_seed=42):
+    def create_gal_positions(self, los, random_seed=42, overwrite=False):
         """
         Creates galaxy positions by sampling from the density field.
 
@@ -398,32 +410,41 @@ class LensingMocks:
 
         mu_mean = self.N_T17_persbin / self.npix
 
-        self.pixel_perzbin_persbin = [[] for _ in range(self.nzbins)]
-        self.ra_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
-        self.dec_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
-        self.redshift_sources_perzbin_persbin = [[] for _ in range(self.nzbins)]
-
+        
         with open(fname, 'rb') as f:
-            for i in tqdm(range(self.nzbins), desc="Reading density shells"):
+            for zbin in tqdm(range(self.nzbins), desc="Reading density shells"):
+
                 kplane = int.from_bytes(f.read(4), 'little')
                 delta_shell = np.frombuffer(f.read(self.npix * 4), dtype=np.float32)
+                
+                virtual_memory_info = psutil.virtual_memory()._asdict()
+                virtual_memory_info_gb = {key: value / (1024 ** 3) if isinstance(value, (int, float)) else value
+                                        for key, value in virtual_memory_info.items()}
+                virtual_memory_info_gb['percent'] = virtual_memory_info['percent']
+                
+                print(virtual_memory_info_gb)
 
                 for sbin in range(self.nsbins):
-                    mu = mu_mean[sbin, i] * 2 * (1 + delta_shell)
-                    ngal = np.random.poisson(mu)
-                    ipix = np.repeat(np.arange(self.npix), ngal)
-                    if ipix.size > 0:
-                        selected = np.random.choice(ipix, int(round(self.N_T17_persbin[sbin, i])), replace=False)
-                        ra, dec = hp.pix2ang(nside=self.nside, ipix=selected, lonlat=True)
-                        redshift = np.ones_like(ra)*self.zbins[i,0]
+                    outfname = self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}.npz'
+                    if((outfname.exists())&(overwrite==False)):
+                        print(outfname / ' exits already')
                     else:
-                        selected, ra, dec = [], [], []
-                        redshift = []
-
-                    self.pixel_perzbin_persbin[i].append(selected)
-                    self.ra_sources_perzbin_persbin[i].append(ra)
-                    self.dec_sources_perzbin_persbin[i].append(dec)
-                    self.redshift_sources_perzbin_persbin[i].append(redshift)
+                        print('precomputing '/ outfname)
+                        mu = mu_mean[sbin, zbin] * (1 + delta_shell)
+                        mu[np.where(mu<0)[0]] = 0
+                        
+                        ngal = tf.random.poisson(shape=[1],lam=mu).numpy()[0].astype(np.int64)
+                        total_ngal = np.sum(ngal)
+                        if total_ngal > 0:
+                            # selected = np.random.choice(np.repeat(np.arange(self.npix), ngal), int(round(self.N_T17_persbin[sbin, zbin])), replace=False)
+                            selected = np.repeat(np.arange(self.npix), ngal)
+                        else:
+                            selected = []
+                        np.savez(self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}',selected=np.array(selected).astype(np.int32))
+                        del ngal, mu, selected
+                        
+                        gc.collect()
+                        
 
     def add_noise_sigma(self, g1, g2, epsilon_cov=None, epsilon_mean=None, epsilon_data=None, random_seed=42):
         """
@@ -493,44 +514,42 @@ class LensingMocks:
 
         return epsilon_obs.real, epsilon_obs.imag, weights
 
-    def combine_source_planes(self, los):
+    def conduct_source_planes(self, los, sbin):
         """
         Combines the source planes by stacking the shear and convergence maps across redshift bins.
 
         Parameters:
         - los (int): Line of sight index
         """
-        self.kappa_allbins = [[] for _ in range(self.nsbins)]
-        self.gamma1_allbins = [[] for _ in range(self.nsbins)]
-        self.gamma2_allbins = [[] for _ in range(self.nsbins)]
-        self.ra_allbins = [[] for _ in range(self.nsbins)]
-        self.dec_allbins = [[] for _ in range(self.nsbins)]
-        self.redshift_allbins = [[] for _ in range(self.nsbins)]
+        self.kappa_sbin = []
+        self.gamma1_sbin = []
+        self.gamma2_sbin = []
+        self.ra_sbin = []
+        self.dec_sbin = []
+        self.redshift_sbin = []
 
         for zbin in tqdm(range(self.nzbins), desc="Combining source planes"):
-            kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
-            if np.any(np.isnan([kappa_zbin, gamma1_zbin, gamma2_zbin])):
-                print(f'Lens maps have NaNs in redshift bin {zbin + 1}')
-
-            for sbin in range(self.nsbins):
-                pix_indices = self.pixel_perzbin_persbin[zbin][sbin]
-                if len(pix_indices) == 0:
-                    continue
-                self.kappa_allbins[sbin].append(kappa_zbin[pix_indices])
-                self.gamma1_allbins[sbin].append(gamma1_zbin[pix_indices])
-                self.gamma2_allbins[sbin].append(gamma2_zbin[pix_indices])
-                self.ra_allbins[sbin].append(self.ra_sources_perzbin_persbin[zbin][sbin])
-                self.dec_allbins[sbin].append(self.dec_sources_perzbin_persbin[zbin][sbin])
-                self.redshift_allbins[sbin].append(self.redshift_sources_perzbin_persbin[zbin][sbin])
+            pix_indices = np.load(self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}.npz')['selected']
+            if(len(pix_indices)>0):
+                kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
+                if np.any(np.isnan([kappa_zbin, gamma1_zbin, gamma2_zbin])):
+                    print(f'Lens maps have NaNs in redshift bin {zbin + 1}')
+                    
+                self.kappa_sbin.append(kappa_zbin[pix_indices])
+                self.gamma1_sbin.append(gamma1_zbin[pix_indices])
+                self.gamma2_sbin.append(gamma2_zbin[pix_indices])
+                self.ra_sbin.append(self.ra_pix[pix_indices])
+                self.dec_sbin.append(self.dec_pix[pix_indices])
+                self.redshift_sbin.append(np.ones_like(pix_indices)*self.zbins[zbin,1])
 
         # Concatenate lists into arrays
-        for sbin in range(self.nsbins):
-            self.kappa_allbins[sbin] = np.concatenate(self.kappa_allbins[sbin])
-            self.gamma1_allbins[sbin] = np.concatenate(self.gamma1_allbins[sbin])
-            self.gamma2_allbins[sbin] = np.concatenate(self.gamma2_allbins[sbin])
-            self.ra_allbins[sbin] = np.concatenate(self.ra_allbins[sbin])
-            self.dec_allbins[sbin] = np.concatenate(self.dec_allbins[sbin])
-            self.redshift_allbins[sbin] = np.concatenate(self.redshift_allbins[sbin])
+        
+        self.kappa_sbin = np.concatenate(self.kappa_sbin)
+        self.gamma1_sbin = np.concatenate(self.gamma1_sbin)
+        self.gamma2_sbin = np.concatenate(self.gamma2_sbin)
+        self.ra_sbin = np.concatenate(self.ra_sbin)
+        self.dec_sbin = np.concatenate(self.dec_sbin)
+        self.redshift_sbin = np.concatenate(self.redshift_sbin)
 
     def create_sigma_shear_catalogue(self, los, sbin, epsilon_cov=None, epsilon_mean=None, epsilon_data=None,
                                      random_seed=42):
@@ -548,18 +567,24 @@ class LensingMocks:
         Returns:
         - gamma_table (Table): Astropy Table containing the shear catalogue
         """
-        kappa = self.kappa_allbins[sbin]
-        gamma1 = self.gamma1_allbins[sbin]
-        gamma2 = self.gamma2_allbins[sbin]
-        ra = self.ra_allbins[sbin]
-        dec = self.dec_allbins[sbin]
-        redshift = self.redshift_allbins[sbin]
+        
+        self.conduct_source_planes(los=los, sbin=sbin)
+        
+        kappa = self.kappa_sbin
+        gamma1 = self.gamma1_sbin
+        gamma2 = self.gamma2_sbin
+        ra = self.ra_sbin
+        dec = self.dec_sbin
+        redshift = self.redshift_sbin
+        
+        
 
         # Compute reduced shear
         g1 = gamma1 / (1 - kappa)
         g2 = gamma2 / (1 - kappa)
 
         # Add noise to shear
+        print('adding noise')
         e1_obs, e2_obs, weights = self.add_noise_sigma(
             g1, g2, epsilon_cov=epsilon_cov, epsilon_mean=epsilon_mean,
             epsilon_data=epsilon_data, random_seed=random_seed
