@@ -15,7 +15,7 @@ class LensingMocks:
     A class for handling lensing covariance computations.
     """
 
-    def __init__(self, download_dir, output_dir, nres, nsbins, seed=42):
+    def __init__(self, download_dir, output_dir, nres, nsbins, nzbins, seed=42, load_density_file = False):
         """
         Initializes directories, resolution, and number of bins.
 
@@ -24,6 +24,7 @@ class LensingMocks:
         - output_dir (str): Directory to output data
         - nres (int): Resolution parameter (power of 2)
         - nsbins (int): Number of source bins
+        - nzbins (int): Number of redshift bins
         """
         self.download_dir = Path(download_dir)
         self.output_dir = Path(output_dir)
@@ -31,9 +32,8 @@ class LensingMocks:
         self.nside = 2 ** self.nres
         self.npix = hp.nside2npix(nside=self.nside)
         self.nsbins = nsbins
-        
-        zbins = np.loadtxt('nofz/nofz_takashi_zbins.dat')
-        self.nzbins = len(zbins)
+        self.nzbins = nzbins
+        self.load_density_file = load_density_file
         
         tf.random.set_seed(seed)
         np.random.seed(seed)
@@ -104,12 +104,13 @@ class LensingMocks:
         if all_files_available:
             print('All source files available')
 
-        density_filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
-        if not density_filename.exists():
-            print(f'Downloading density file {density_filename}')
-            self.download_density_files(los=los, overwrite=True)
-        else:
-            print(f'Density file {density_filename} available')
+        if(self.load_density_file):
+            density_filename = self.download_dir / f'allskymap_nres{self.nres}r{los:03}.delta_shell.dat'
+            if not density_filename.exists():
+                print(f'Downloading density file {density_filename}')
+                self.download_density_files(los=los, overwrite=True)
+            else:
+                print(f'Density file {density_filename} available')
 
     def load_maps(self, z, los):
         """
@@ -209,7 +210,7 @@ class LensingMocks:
 
         return ra_rot, dec_rot, gamma_rot.real, gamma_rot.imag
 
-    def create_lensing_maps(self, los):
+    def create_lensing_maps(self, los, save_kappa=True, save_gamma=False):
         """
         Creates lensing maps (gamma1, gamma2, kappa) for all source bins by summing over redshift bins.
 
@@ -232,12 +233,14 @@ class LensingMocks:
             gamma2_allbins += weights * gamma2_zbin
 
         for sbin in range(self.nsbins):
-            hp.write_map(self.output_dir / f'gamma1_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
-                         gamma1_allbins[sbin], dtype=np.float32, overwrite=True)
-            hp.write_map(self.output_dir / f'gamma2_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
-                         gamma2_allbins[sbin], dtype=np.float32, overwrite=True)
-            hp.write_map(self.output_dir / f'kappa_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
-                         kappa_allbins[sbin], dtype=np.float32, overwrite=True)
+            if(save_gamma):
+                hp.write_map(self.output_dir / f'lensing_maps/gamma1_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                            gamma1_allbins[sbin], dtype=np.float32, overwrite=True)
+                hp.write_map(self.output_dir / f'lensing_maps/gamma2_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                            gamma2_allbins[sbin], dtype=np.float32, overwrite=True)
+            if(save_kappa):
+                hp.write_map(self.output_dir / f'lensing_maps/kappa_nside{self.nside}_tomobin{sbin + 1}_{los}.fits',
+                            kappa_allbins[sbin], dtype=np.float32, overwrite=True)
 
         print(f'Finished writing shear maps for LOS {los}')
 
@@ -425,7 +428,7 @@ class LensingMocks:
                 print(virtual_memory_info_gb)
 
                 for sbin in range(self.nsbins):
-                    outfname = self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}.npz'
+                    outfname = self.output_dir / f'gal_pos/gal_pos_zbin{zbin}_sbin{sbin}.npz'
                     if((outfname.exists())&(overwrite==False)):
                         print(outfname / ' exits already')
                     else:
@@ -440,7 +443,7 @@ class LensingMocks:
                             selected = np.repeat(np.arange(self.npix), ngal)
                         else:
                             selected = []
-                        np.savez(self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}',selected=np.array(selected).astype(np.int32))
+                        np.savez(self.output_dir / f'gal_pos/gal_pos_zbin{zbin}_sbin{sbin}',selected=np.array(selected).astype(np.int32))
                         del ngal, mu, selected
                         
                         gc.collect()
@@ -529,7 +532,7 @@ class LensingMocks:
         self.redshift_sbin = []
 
         for zbin in tqdm(range(self.nzbins), desc="Combining source planes"):
-            pix_indices = np.load(self.output_dir / f'gal_pos_zbin{zbin}_sbin{sbin}.npz')['selected']
+            pix_indices = np.load(self.output_dir / f'gal_pos/gal_pos_zbin{zbin}_sbin{sbin}.npz')['selected']
             if(len(pix_indices)>0):
                 kappa_zbin, gamma1_zbin, gamma2_zbin = self.load_maps(z=zbin + 1, los=los)
                 if np.any(np.isnan([kappa_zbin, gamma1_zbin, gamma2_zbin])):
